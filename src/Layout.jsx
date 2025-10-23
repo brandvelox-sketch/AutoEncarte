@@ -1,7 +1,8 @@
 import React from "react";
 import { Link, useLocation, useNavigate } from "react-router-dom";
 import { createPageUrl } from "@/utils";
-import { base44 } from "@/api/base44Client";
+import { supabase } from "@/lib/supabase";
+import { userService } from "@/services/api";
 import { 
   LayoutDashboard, 
   FolderOpen, 
@@ -36,7 +37,7 @@ export default function Layout({ children }) {
 
   const { data: user } = useQuery({
     queryKey: ['currentUser'],
-    queryFn: () => base44.auth.me(),
+    queryFn: () => userService.getCurrentUser(),
   });
 
   const isAdmin = user?.role === 'admin';
@@ -78,17 +79,18 @@ export default function Layout({ children }) {
     },
   ];
 
-  const handleLogout = () => {
-    base44.auth.logout();
+  const handleLogout = async () => {
+    await supabase.auth.signOut();
+    navigate('/');
   };
 
   return (
     <SidebarProvider>
-      <div className="min-h-screen flex w-full bg-gradient-to-br from-blue-50 via-white to-purple-50">
+      <div className="min-h-screen flex w-full bg-gradient-to-br from-blue-50 via-white to-blue-50">
         <Sidebar className="border-r border-gray-200 bg-white/80 backdrop-blur-sm">
           <SidebarHeader className="border-b border-gray-200 p-6">
             <div className="flex items-center gap-3">
-              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-purple-600 rounded-xl flex items-center justify-center shadow-lg">
+              <div className="w-10 h-10 bg-gradient-to-br from-blue-600 to-blue-800 rounded-xl flex items-center justify-center shadow-lg">
                 <Sparkles className="w-6 h-6 text-white" />
               </div>
               <div>
@@ -111,7 +113,7 @@ export default function Layout({ children }) {
                         asChild 
                         className={`hover:bg-blue-50 hover:text-blue-700 transition-all duration-200 rounded-lg mb-1 ${
                           location.pathname === item.url ? 'bg-blue-100 text-blue-700 font-semibold' : ''
-                        } ${item.highlight ? 'bg-gradient-to-r from-blue-600 to-purple-600 text-white hover:from-blue-700 hover:to-purple-700 hover:text-white font-semibold' : ''}`}
+                        } ${item.highlight ? 'bg-gradient-to-r from-blue-600 to-blue-800 text-white hover:from-blue-700 hover:to-blue-900 hover:text-white font-semibold' : ''}`}
                       >
                         <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
                           <item.icon className="w-4 h-4" />
@@ -135,8 +137,8 @@ export default function Layout({ children }) {
                       <SidebarMenuItem key={item.title}>
                         <SidebarMenuButton 
                           asChild 
-                          className={`hover:bg-purple-50 hover:text-purple-700 transition-all duration-200 rounded-lg mb-1 ${
-                            location.pathname === item.url ? 'bg-purple-100 text-purple-700 font-semibold' : ''
+                          className={`hover:bg-blue-50 hover:text-blue-700 transition-all duration-200 rounded-lg mb-1 ${
+                            location.pathname === item.url ? 'bg-blue-100 text-blue-700 font-semibold' : ''
                           }`}
                         >
                           <Link to={item.url} className="flex items-center gap-3 px-3 py-2.5">
@@ -156,7 +158,7 @@ export default function Layout({ children }) {
             <div className="space-y-3">
               <div className="flex items-center gap-3">
                 <Avatar>
-                  <AvatarFallback className="bg-gradient-to-br from-blue-600 to-purple-600 text-white font-semibold">
+                  <AvatarFallback className="bg-gradient-to-br from-blue-600 to-blue-800 text-white font-semibold">
                     {user?.full_name?.charAt(0) || 'U'}
                   </AvatarFallback>
                 </Avatar>
@@ -164,7 +166,7 @@ export default function Layout({ children }) {
                   <p className="font-semibold text-gray-900 text-sm truncate">{user?.full_name || 'Usuário'}</p>
                   <p className="text-xs text-gray-500 truncate">{user?.email}</p>
                   {isAdmin && (
-                    <span className="inline-block mt-1 px-2 py-0.5 bg-purple-100 text-purple-700 text-xs rounded-full font-medium">
+                    <span className="inline-block mt-1 px-2 py-0.5 bg-blue-100 text-blue-700 text-xs rounded-full font-medium">
                       Administrador
                     </span>
                   )}
@@ -186,7 +188,7 @@ export default function Layout({ children }) {
           <header className="bg-white/80 backdrop-blur-sm border-b border-gray-200 px-6 py-4 md:hidden">
             <div className="flex items-center gap-4">
               <SidebarTrigger className="hover:bg-gray-100 p-2 rounded-lg transition-colors" />
-              <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+              <h1 className="text-xl font-bold bg-gradient-to-r from-blue-600 to-blue-800 bg-clip-text text-transparent">
                 Auto Encarte Pro
               </h1>
             </div>
