@@ -1,98 +1,167 @@
 import React, { useState } from 'react';
 import { useMutation, useQueryClient } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
-import { projectService } from '@/services/api';
+import { projectService, productService } from '@/services/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
 import { Button } from '@/components/ui/button';
+import ManualProductEntry from '@/components/Components/new project/ManualProductEntry';
+import FileDropzone from '@/components/Components/new project/FileDropzone';
+import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 
 export default function NewProject() {
   const navigate = useNavigate();
   const queryClient = useQueryClient();
   const [name, setName] = useState('');
   const [description, setDescription] = useState('');
+  const [products, setProducts] = useState([]);
+  const [isCreating, setIsCreating] = useState(false);
+  const [selectedFile, setSelectedFile] = useState(null);
 
-  const createMutation = useMutation({
+  const createProjectMutation = useMutation({
     mutationFn: (data) => projectService.createProject(data),
-    onSuccess: (data) => {
-      queryClient.invalidateQueries(['projects']);
-      navigate(`/project/${data.id}`);
-    },
   });
 
-  const handleSubmit = (e) => {
-    e.preventDefault();
-    if (!name.trim()) return;
+  const createProductMutation = useMutation({
+    mutationFn: (data) => productService.createProduct(data),
+  });
+  
+  const handleFileSelect = (file) => {
+    setSelectedFile(file);
+    if (file) {
+      // Simulação de processamento de CSV.
+      // Em um projeto real, você usaria uma biblioteca como 'papaparse'.
+      console.warn("Processamento de arquivo CSV é apenas uma simulação.");
+      const mockProducts = [
+        { name: "Produto do Arquivo 1", description: "Código: 123", price: "R$ 10,50" },
+        { name: "Produto do Arquivo 2", description: "Código: 456", price: "R$ 22,00" },
+      ];
+      setProducts(mockProducts);
+    } else {
+      setProducts([]);
+    }
+  };
 
-    createMutation.mutate({
-      name: name.trim(),
-      description: description.trim(),
-      status: 'draft',
-    });
+
+  const handleSubmit = async (e) => {
+    e.preventDefault();
+    if (!name.trim() || products.length === 0) return;
+
+    setIsCreating(true);
+
+    try {
+      const newProject = await createProjectMutation.mutateAsync({
+        name: name.trim(),
+        description: description.trim(),
+        status: 'draft',
+      });
+
+      for (const product of products) {
+        const priceNumber = parseFloat(product.price.replace('R$', '').trim().replace(',', '.'));
+        
+        await createProductMutation.mutateAsync({
+          project_id: newProject.id,
+          name: product.name,
+          description: product.description,
+          price: isNaN(priceNumber) ? 0 : priceNumber,
+          status: 'pending',
+        });
+      }
+
+      queryClient.invalidateQueries({ queryKey: ['projects'] });
+      navigate(`/project/${newProject.id}`);
+
+    } catch (error) {
+      console.error("Erro ao criar projeto ou produtos:", error);
+    } finally {
+      setIsCreating(false);
+    }
   };
 
   return (
-    <div className="p-6 max-w-2xl mx-auto">
+    <div className="p-6 max-w-4xl mx-auto">
       <div className="mb-6">
-        <h1 className="text-3xl font-bold text-gray-900">Novo Encarte</h1>
-        <p className="text-gray-600 mt-1">Crie um novo projeto de encarte</p>
+        <h1 className="text-3xl font-bold text-gray-900">Criar Novo Encarte</h1>
+        <p className="text-gray-600 mt-1">Configure seu novo encarte de ofertas</p>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Informações do Projeto</CardTitle>
-          <CardDescription>Preencha os dados básicos do seu encarte</CardDescription>
-        </CardHeader>
-        <CardContent>
-          <form onSubmit={handleSubmit} className="space-y-4">
+      <form onSubmit={handleSubmit} className="space-y-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>1. Informações do Encarte</CardTitle>
+          </CardHeader>
+          <CardContent className="space-y-4">
             <div>
-              <Label htmlFor="name">Nome do Projeto</Label>
+              <Label htmlFor="name">Nome do Encarte</Label>
               <Input
                 id="name"
                 value={name}
                 onChange={(e) => setName(e.target.value)}
-                placeholder="Ex: Encarte Natal 2024"
+                placeholder="Ex: Ofertas Semana 47 - Dezembro 2024"
                 required
+                disabled={isCreating}
               />
             </div>
-
             <div>
-              <Label htmlFor="description">Descrição</Label>
+              <Label htmlFor="description">Descrição (Opcional)</Label>
               <textarea
                 id="description"
                 value={description}
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="Descreva o objetivo deste encarte..."
-                className="flex min-h-[100px] w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm ring-offset-white placeholder:text-gray-400 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-blue-500 focus-visible:ring-offset-2"
+                className="flex min-h-[80px] w-full rounded-lg border border-gray-300 bg-white px-3 py-2 text-sm"
+                disabled={isCreating}
               />
             </div>
+          </CardContent>
+        </Card>
+        
+        <Card>
+          <CardHeader>
+            <CardTitle>2. Adicionar Produtos</CardTitle>
+          </CardHeader>
+          <CardContent>
+            <Tabs defaultValue="manual" className="w-full">
+              <TabsList className="grid w-full grid-cols-2">
+                <TabsTrigger value="manual">Entrada Manual</TabsTrigger>
+                <TabsTrigger value="upload">Upload de Arquivo</TabsTrigger>
+              </TabsList>
+              <TabsContent value="manual">
+                <ManualProductEntry
+                  products={products}
+                  setProducts={setProducts}
+                  disabled={isCreating}
+                />
+              </TabsContent>
+              <TabsContent value="upload">
+                <FileDropzone
+                  selectedFile={selectedFile}
+                  onFileSelect={handleFileSelect}
+                  disabled={isCreating}
+                />
+              </TabsContent>
+            </Tabs>
+          </CardContent>
+        </Card>
 
-            <div className="flex gap-2 pt-4">
-              <Button
-                type="submit"
-                disabled={createMutation.isPending || !name.trim()}
-                className="bg-blue-600 hover:bg-blue-700"
-              >
-                {createMutation.isPending ? 'Criando...' : 'Criar Projeto'}
-              </Button>
-              <Button
-                type="button"
-                variant="outline"
-                onClick={() => navigate('/dashboard')}
-              >
-                Cancelar
-              </Button>
-            </div>
-
-            {createMutation.isError && (
-              <div className="text-sm text-red-600">
-                Erro ao criar projeto. Tente novamente.
-              </div>
-            )}
-          </form>
-        </CardContent>
-      </Card>
+        <div className="flex gap-2 pt-4">
+          <Button
+            type="submit"
+            disabled={isCreating || !name.trim() || products.length === 0}
+          >
+            {isCreating ? 'Criando...' : `Criar Encarte (${products.length} linhas)`}
+          </Button>
+          <Button
+            type="button"
+            variant="outline"
+            onClick={() => navigate('/dashboard')}
+            disabled={isCreating}
+          >
+            Cancelar
+          </Button>
+        </div>
+      </form>
     </div>
   );
 }
