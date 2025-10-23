@@ -1,0 +1,60 @@
+{
+  "name": "Product",
+  "type": "object",
+  "properties": {
+    "project_id": {
+      "type": "string",
+      "description": "ID do projeto ao qual pertence"
+    },
+    "name": {
+      "type": "string",
+      "description": "Nome do produto"
+    },
+    "description": {
+      "type": "string",
+      "description": "Descri\u00e7\u00e3o do produto"
+    },
+    "price": {
+      "type": "string",
+      "description": "Pre\u00e7o do produto"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "pending",
+        "searching_bank",
+        "searching_web",
+        "validating",
+        "completed",
+        "failed"
+      ],
+      "default": "pending",
+      "description": "Status do processamento"
+    },
+    "image_url": {
+      "type": "string",
+      "description": "URL da imagem encontrada"
+    },
+    "image_source": {
+      "type": "string",
+      "enum": [
+        "certified_bank",
+        "web_validated",
+        "none"
+      ],
+      "description": "Origem da imagem"
+    },
+    "error_message": {
+      "type": "string",
+      "description": "Mensagem de erro se falhou"
+    },
+    "order": {
+      "type": "integer",
+      "description": "Ordem do produto no encarte"
+    }
+  },
+  "required": [
+    "project_id",
+    "name"
+  ]
+}

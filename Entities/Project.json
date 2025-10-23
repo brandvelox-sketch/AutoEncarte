@@ -1,0 +1,58 @@
+{
+  "name": "Project",
+  "type": "object",
+  "properties": {
+    "name": {
+      "type": "string",
+      "description": "Nome do projeto de encarte"
+    },
+    "status": {
+      "type": "string",
+      "enum": [
+        "draft",
+        "processing",
+        "completed",
+        "failed"
+      ],
+      "default": "draft",
+      "description": "Status do projeto"
+    },
+    "total_products": {
+      "type": "integer",
+      "description": "Total de produtos no encarte"
+    },
+    "products_completed": {
+      "type": "integer",
+      "default": 0,
+      "description": "Produtos processados com sucesso"
+    },
+    "products_from_bank": {
+      "type": "integer",
+      "default": 0,
+      "description": "Produtos encontrados no banco certificado"
+    },
+    "products_from_web": {
+      "type": "integer",
+      "default": 0,
+      "description": "Produtos encontrados na web"
+    },
+    "products_failed": {
+      "type": "integer",
+      "default": 0,
+      "description": "Produtos que falhou ao processar"
+    },
+    "processing_started_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o processamento iniciou"
+    },
+    "processing_finished_at": {
+      "type": "string",
+      "format": "date-time",
+      "description": "Quando o processamento finalizou"
+    }
+  },
+  "required": [
+    "name"
+  ]
+}
