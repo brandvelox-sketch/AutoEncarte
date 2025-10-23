@@ -93,6 +93,11 @@ export const driveService = {
 };
 
 export const projectService = {
+
+  async startProjectProcessing(projectId) {
+    return callEdgeFunction('process-project', { project_id: projectId });
+  },
+
   async getProjects() {
     const { data, error } = await supabase
       .from('projects')
@@ -238,6 +243,74 @@ export const certifiedImageService = {
 
     if (error) throw error;
   },
+  
+  async uploadImageFile(file, metadata = {}) {
+    const { data: { user } } = await supabase.auth.getUser();
+
+    if (!user) {
+      throw new Error('User not authenticated');
+    }
+
+    // Gerar nome único para o arquivo
+    const fileExt = file.name.split('.').pop();
+    const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
+    const filePath = `${user.id}/${fileName}`;
+
+    // Upload para o Storage
+    const { data: uploadData, error: uploadError } = await supabase.storage
+      .from('certified-images')
+      .upload(filePath, file, {
+        cacheControl: '3600',
+        upsert: false,
+      });
+
+    if (uploadError) {
+      throw new Error(`Upload failed: ${uploadError.message}`);
+    }
+
+    // Obter URL pública
+    const { data: urlData } = supabase.storage
+      .from('certified-images')
+      .getPublicUrl(filePath);
+
+    const imageUrl = urlData.publicUrl;
+
+    // Criar registro no banco de dados
+    const normalizedName = metadata.product_name
+      ? metadata.product_name
+          .toLowerCase()
+          .normalize("NFD")
+          .replace(/[\u0300-\u036f]/g, "")
+          .replace(/[^a-z0-9\s]/g, "")
+          .trim()
+      : "";
+
+    const { data: imageRecord, error: dbError } = await supabase
+      .from('certified_images')
+      .insert([{
+        product_name: metadata.product_name || file.name,
+        normalized_name: normalizedName,
+        image_url: imageUrl,
+        category: metadata.category || null,
+        description: metadata.description || null,
+        tags: metadata.tags || [],
+        uploaded_by: user.id,
+        usage_count: 0,
+      }])
+      .select()
+      .single();
+
+    if (dbError) {
+      // Se falhar ao criar registro, deletar arquivo do storage
+      await supabase.storage
+        .from('certified-images')
+        .remove([filePath]);
+      
+      throw new Error(`Database error: ${dbError.message}`);
+    }
+
+    return imageRecord;
+  },
 };
 
 export const userService = {
@@ -278,3 +351,4 @@ export const userService = {
     return data;
   },
 };
+

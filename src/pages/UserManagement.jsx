@@ -2,9 +2,16 @@ import React from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { userService } from '@/services/api';
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card';
-import { Avatar, AvatarFallback } from '@/components/ui/avatar';
+import { Button } from '@/components/ui/button';
+import { Users, UserPlus } from 'lucide-react';
+import UserCard from '@/components/Components/usermanagement/UserCard';
 
 export default function UserManagement() {
+  const { data: currentUser } = useQuery({
+    queryKey: ['currentUser'],
+    queryFn: () => userService.getCurrentUser(),
+  });
+
   const { data: users = [], isLoading } = useQuery({
     queryKey: ['users'],
     queryFn: () => userService.getUsers(),
@@ -12,57 +19,98 @@ export default function UserManagement() {
 
   if (isLoading) {
     return (
-      <div className="p-6 flex items-center justify-center">
+      <div className="p-6 flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
     );
   }
 
+  // Separar admins e operadores
+  const admins = users.filter(u => u.role === 'admin');
+  const operators = users.filter(u => u.role === 'operator');
+
   return (
-    <div className="p-6 space-y-6">
-      <div>
-        <h1 className="text-3xl font-bold text-gray-900">Gerenciar Usuários</h1>
-        <p className="text-gray-600 mt-1">Administre os usuários do sistema</p>
+    <div className="p-6 space-y-6 max-w-7xl mx-auto">
+      {/* Cabeçalho */}
+      <div className="flex items-center justify-between">
+        <div>
+          <h1 className="text-3xl font-bold bg-gradient-to-r from-blue-600 to-purple-600 bg-clip-text text-transparent">
+            Gerenciar Usuários
+          </h1>
+          <p className="text-gray-600 mt-1">
+            {users.length} {users.length === 1 ? 'usuário registrado' : 'usuários registrados'} no sistema
+          </p>
+        </div>
+        <Button 
+          className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
+          disabled
+        >
+          <UserPlus className="w-4 h-4 mr-2" />
+          Adicionar Usuário
+        </Button>
       </div>
 
-      <Card>
-        <CardHeader>
-          <CardTitle>Usuários</CardTitle>
-          <CardDescription>
-            {users.length} {users.length === 1 ? 'usuário' : 'usuários'} registrados
-          </CardDescription>
-        </CardHeader>
-        <CardContent>
-          {users.length === 0 ? (
-            <div className="text-center py-8 text-gray-500">
-              Nenhum usuário encontrado
+      {users.length === 0 ? (
+        <Card className="border-2 border-dashed">
+          <CardContent className="p-12 text-center">
+            <div className="w-20 h-20 mx-auto mb-4 bg-gradient-to-br from-blue-500 to-purple-600 rounded-full flex items-center justify-center">
+              <Users className="w-10 h-10 text-white" />
             </div>
-          ) : (
-            <div className="space-y-3">
-              {users.map(user => (
-                <div key={user.id} className="flex items-center justify-between p-4 border rounded-lg">
-                  <div className="flex items-center gap-3">
-                    <Avatar>
-                      <AvatarFallback className="bg-blue-600 text-white">
-                        {user.full_name?.charAt(0) || 'U'}
-                      </AvatarFallback>
-                    </Avatar>
-                    <div>
-                      <p className="font-semibold text-gray-900">{user.full_name}</p>
-                      <p className="text-sm text-gray-600">{user.email}</p>
-                    </div>
+            <h3 className="text-xl font-semibold text-gray-800 mb-2">Nenhum usuário encontrado</h3>
+            <p className="text-gray-500">Os usuários aparecerão aqui assim que forem criados.</p>
+          </CardContent>
+        </Card>
+      ) : (
+        <div className="space-y-6">
+          {/* Administradores */}
+          {admins.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <div className="w-8 h-8 bg-gradient-to-br from-purple-500 to-purple-600 rounded-lg flex items-center justify-center">
+                    <Users className="w-4 h-4 text-white" />
                   </div>
-                  <span className={`px-3 py-1 rounded-full text-xs font-medium ${
-                    user.role === 'admin' ? 'bg-blue-100 text-blue-700' : 'bg-gray-100 text-gray-700'
-                  }`}>
-                    {user.role === 'admin' ? 'Administrador' : 'Operador'}
-                  </span>
+                  Administradores
+                </CardTitle>
+                <CardDescription>
+                  {admins.length} {admins.length === 1 ? 'administrador' : 'administradores'} com acesso completo
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {admins.map(user => (
+                    <UserCard key={user.id} user={user} currentUser={currentUser} />
+                  ))}
                 </div>
-              ))}
-            </div>
+              </CardContent>
+            </Card>
           )}
-        </CardContent>
-      </Card>
+
+          {/* Operadores */}
+          {operators.length > 0 && (
+            <Card>
+              <CardHeader>
+                <CardTitle className="flex items-center gap-2">
+                  <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-blue-600 rounded-lg flex items-center justify-center">
+                    <Users className="w-4 h-4 text-white" />
+                  </div>
+                  Operadores
+                </CardTitle>
+                <CardDescription>
+                  {operators.length} {operators.length === 1 ? 'operador' : 'operadores'} no sistema
+                </CardDescription>
+              </CardHeader>
+              <CardContent>
+                <div className="grid gap-4 md:grid-cols-2 lg:grid-cols-3">
+                  {operators.map(user => (
+                    <UserCard key={user.id} user={user} currentUser={currentUser} />
+                  ))}
+                </div>
+              </CardContent>
+            </Card>
+          )}
+        </div>
+      )}
     </div>
   );
 }
