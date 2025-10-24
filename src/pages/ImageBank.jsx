@@ -1,41 +1,22 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { gapi } from 'gapi-script';
-import { certifiedImageService, driveService } from '@/services/api';
+import { certifiedImageService } from '@/services/api';
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Dialog, DialogContent } from '@/components/ui/dialog';
-import { Plus, Upload, Search, ImageIcon, RefreshCw, AlertCircle } from 'lucide-react';
+import { Plus, Upload, Search, ImageIcon, RefreshCw, AlertCircle, CheckCircle } from 'lucide-react';
 import ImageCard from '@/components/Components/imagebank/ImageCard';
 import AddImageDialog from '@/components/Components/imagebank/AddImageDialog';
 import BulkUploadDialog from '@/components/Components/imagebank/BulkUploadDialog';
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
-
-// --- INÍCIO DA CONFIGURAÇÃO DO GOOGLE ---
-const GOOGLE_CLIENT_ID = "696088060050-ts9ekcbr2k7bn8r5cshqeb6k5e4gnf0k.apps.googleusercontent.com"; // Client ID do seu "Aplicativo da Web"
-const DRIVE_API_KEY = "AIzaSyDo3ddnPACiwnnjjsXux3V-V_P3UcDSeJA"; // Sua API Key
-const DRIVE_FOLDER_ID = "1OdNiRnKCRxMDR6sERogipofXwsGni02i"; // ID da sua pasta de imagens no Drive
-const DRIVE_SCOPES = "https://www.googleapis.com/auth/drive.readonly";
-// --- FIM DA CONFIGURAÇÃO DO GOOGLE ---
 
 export default function ImageBank() {
   const queryClient = useQueryClient();
   const [search, setSearch] = useState('');
   const [addDialogOpen, setAddDialogOpen] = useState(false);
   const [bulkDialogOpen, setBulkDialogOpen] = useState(false);
+  const [syncResult, setSyncResult] = useState(null);
   const [syncError, setSyncError] = useState(null);
-
-  useEffect(() => {
-    function start() {
-      gapi.client.init({
-        apiKey: DRIVE_API_KEY,
-        clientId: GOOGLE_CLIENT_ID,
-        scope: DRIVE_SCOPES,
-        discoveryDocs: ['https://www.googleapis.com/discovery/v1/apis/drive/v3/rest'],
-      });
-    }
-    gapi.load('client:auth2', start);
-  }, []);
 
   const { data: images = [], isLoading } = useQuery({
     queryKey: ['certifiedImages'],
@@ -50,44 +31,25 @@ export default function ImageBank() {
   });
 
   const syncMutation = useMutation({
-    mutationFn: (files) => driveService.syncDrive(files),
+    mutationFn: () => certifiedImageService.syncWithDrive(),
     onSuccess: (data) => {
-      alert(data.message || 'Sincronização concluída!');
+      setSyncResult(data);
+      setSyncError(null);
       queryClient.invalidateQueries({ queryKey: ['certifiedImages'] });
+      
+      // Limpar mensagem após 5 segundos
+      setTimeout(() => setSyncResult(null), 5000);
     },
     onError: (error) => {
-      setSyncError(`Falha na sincronização com o Supabase: ${error.message}`);
+      setSyncError(error.message);
+      setSyncResult(null);
     },
   });
 
   const handleSync = () => {
     setSyncError(null);
-    const authInstance = gapi.auth2.getAuthInstance();
-
-    const processSync = async () => {
-      try {
-        const response = await gapi.client.drive.files.list({
-          q: `'${DRIVE_FOLDER_ID}' in parents and trashed = false`,
-          fields: 'files(id, name)',
-          pageSize: 1000,
-        });
-
-        const driveFiles = response.result.files;
-        if (!driveFiles || driveFiles.length === 0) {
-            alert("Nenhum arquivo encontrado na pasta do Google Drive.");
-            return;
-        }
-        syncMutation.mutate(driveFiles);
-      } catch (error) {
-        console.error("Erro ao listar arquivos do Drive:", error);
-        setSyncError(`Erro ao buscar arquivos no Google Drive: ${error.result?.error?.message || error.message}`);
-      }
-    };
-
-    authInstance.signIn().then(processSync).catch(error => {
-      console.error("Erro no login com Google:", error);
-      setSyncError(`Falha na autenticação com Google: ${error.error || "Popup de permissão foi fechado ou ocorreu um erro no servidor."}`);
-    });
+    setSyncResult(null);
+    syncMutation.mutate();
   };
 
   const handleDelete = (id) => {
@@ -119,13 +81,19 @@ export default function ImageBank() {
               variant="outline"
               onClick={handleSync}
               disabled={syncMutation.isPending}
+              className="hover:bg-blue-50 hover:border-blue-300"
             >
               {syncMutation.isPending ? (
-                 <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2 animate-spin" />
+                  Sincronizando...
+                </>
               ) : (
-                 <RefreshCw className="w-4 h-4 mr-2" />
+                <>
+                  <RefreshCw className="w-4 h-4 mr-2" />
+                  Sincronizar com Drive
+                </>
               )}
-              Sincronizar com Drive
             </Button>
             <Button 
               variant="outline" 
@@ -145,12 +113,42 @@ export default function ImageBank() {
           </div>
         </div>
         
+        {/* Mensagem de Sucesso na Sincronização */}
+        {syncResult && (
+          <Alert className="bg-green-50 border-green-200">
+            <CheckCircle className="h-4 w-4 text-green-600" />
+            <AlertTitle className="text-green-900">Sincronização Concluída!</AlertTitle>
+            <AlertDescription className="text-green-800">
+              <p className="font-semibold">{syncResult.message}</p>
+              <div className="mt-2 text-sm">
+                <p>✅ Novas imagens: {syncResult.added}</p>
+                <p>⏭️ Já existentes: {syncResult.skipped}</p>
+                <p>📊 Total no Drive: {syncResult.total}</p>
+              </div>
+            </AlertDescription>
+          </Alert>
+        )}
+
+        {/* Mensagem de Erro na Sincronização */}
         {syncError && (
-             <Alert variant="destructive">
-                <AlertCircle className="h-4 w-4" />
-                <AlertTitle>Erro de Sincronização</AlertTitle>
-                <AlertDescription>{syncError}</AlertDescription>
-             </Alert>
+          <Alert variant="destructive">
+            <AlertCircle className="h-4 w-4" />
+            <AlertTitle>Erro de Sincronização</AlertTitle>
+            <AlertDescription>
+              <p className="font-semibold mb-2">{syncError}</p>
+              <div className="text-sm space-y-1">
+                <p><strong>Possíveis causas:</strong></p>
+                <ul className="list-disc list-inside ml-2">
+                  <li>A variável GOOGLE_CREDENTIALS_BASE64 não está configurada no Supabase</li>
+                  <li>A Service Account não tem permissão para acessar a pasta do Drive</li>
+                  <li>O ID da pasta está incorreto</li>
+                </ul>
+                <p className="mt-2">
+                  <strong>Como resolver:</strong> Vá em Project Settings → Edge Functions → Secrets no Supabase
+                </p>
+              </div>
+            </AlertDescription>
+          </Alert>
         )}
         
         <div className="relative">
@@ -180,6 +178,16 @@ export default function ImageBank() {
                 ? 'Tente uma busca diferente ou adicione novas imagens.' 
                 : 'Comece adicionando imagens ou sincronize com o Google Drive.'}
             </p>
+            {!search && (
+              <Button
+                onClick={handleSync}
+                disabled={syncMutation.isPending}
+                className="bg-gradient-to-r from-blue-600 to-purple-600 hover:from-blue-700 hover:to-purple-700"
+              >
+                <RefreshCw className="w-4 h-4 mr-2" />
+                Sincronizar com Drive
+              </Button>
+            )}
           </div>
         ) : (
           <div className="grid gap-6 md:grid-cols-2 lg:grid-cols-4">

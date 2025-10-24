@@ -319,6 +319,32 @@ export const certifiedImageService = {
 
     return imageRecord;
   },
+
+  async syncWithDrive() {
+    const { data: { session } } = await supabase.auth.getSession();
+
+    if (!session) {
+      throw new Error('User not authenticated');
+    }
+
+    const url = `${SUPABASE_URL}/functions/v1/sync-drive-images`;
+
+    const response = await fetch(url, {
+      method: 'POST',
+      headers: {
+        'Authorization': `Bearer ${session.access_token}`,
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({}), // Corpo vazio, tudo é feito server-side
+    });
+
+    if (!response.ok) {
+      const error = await response.json();
+      throw new Error(error.error || error.details || 'Falha na sincronização');
+    }
+
+    return response.json();
+  },
 };
 
 export const userService = {

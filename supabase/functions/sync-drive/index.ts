@@ -1,103 +1,218 @@
 import 'jsr:@supabase/functions-js/edge-runtime.d.ts';
 import { createClient } from 'jsr:@supabase/supabase-js@2';
 
-// Headers CORS para permitir que seu app (localhost) chame esta função
 const corsHeaders = {
   "Access-Control-Allow-Origin": "*",
   "Access-Control-Allow-Methods": "POST, OPTIONS",
   "Access-Control-Allow-Headers": "Content-Type, Authorization, X-Client-Info, Apikey",
 };
 
-// Define o formato esperado para cada arquivo vindo do frontend
-interface DriveFile {
-  id: string;
-  name: string;
-}
+const DRIVE_FOLDER_ID = Deno.env.get("DRIVE_FOLDER_ID") || "1OdNiRnKCRxMDR6sERogipofXwsGni02i";
 
-// Função auxiliar para normalizar nomes de produtos para busca
 function normalizeString(str: string): string {
   if (!str) return "";
-  return str.toLowerCase().normalize("NFD").replace(/[\u0300-\u036f]/g, "").replace(/[^a-z0-9\s]/g, "").trim();
+  return str
+    .toLowerCase()
+    .normalize("NFD")
+    .replace(/[\u0300-\u036f]/g, "")
+    .replace(/[^a-z0-9\s]/g, "")
+    .trim();
+}
+
+async function getAccessToken(): Promise<string> {
+  const credentialsBase64 = Deno.env.get("GOOGLE_CREDENTIALS_BASE64");
+  if (!credentialsBase64) {
+    throw new Error("GOOGLE_CREDENTIALS_BASE64 não configurado");
+  }
+
+  const credentials = JSON.parse(atob(credentialsBase64));
+  const clientEmail = credentials.client_email;
+  const privateKey = credentials.private_key;
+
+  const header = { alg: "RS256", typ: "JWT" };
+  const now = Math.floor(Date.now() / 1000);
+  const claim = {
+    iss: clientEmail,
+    scope: "https://www.googleapis.com/auth/drive.readonly",
+    aud: "https://oauth2.googleapis.com/token",
+    exp: now + 3600,
+    iat: now,
+  };
+
+  const encoder = new TextEncoder();
+  const key = await crypto.subtle.importKey(
+    "pkcs8",
+    encoder.encode(privateKey),
+    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
+    false,
+    ["sign"]
+  );
+
+  const encodedHeader = btoa(JSON.stringify(header)).replace(/=/g, "");
+  const encodedClaim = btoa(JSON.stringify(claim)).replace(/=/g, "");
+  const message = `${encodedHeader}.${encodedClaim}`;
+  
+  const signature = await crypto.subtle.sign(
+    "RSASSA-PKCS1-v1_5",
+    key,
+    encoder.encode(message)
+  );
+  
+  const encodedSignature = btoa(String.fromCharCode(...new Uint8Array(signature)))
+    .replace(/\+/g, "-")
+    .replace(/\//g, "_")
+    .replace(/=/g, "");
+    
+  const jwt = `${message}.${encodedSignature}`;
+
+  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+    method: "POST",
+    headers: { "Content-Type": "application/x-www-form-urlencoded" },
+    body: `grant_type=urn:ietf:params:oauth-grant-type:jwt-bearer&assertion=${jwt}`,
+  });
+
+  if (!tokenResponse.ok) {
+    const errorText = await tokenResponse.text();
+    throw new Error(`Falha ao obter token: ${errorText}`);
+  }
+
+  const tokenData = await tokenResponse.json();
+  return tokenData.access_token;
+}
+
+async function listDriveFiles(accessToken: string, folderId: string) {
+  const url = `https://www.googleapis.com/drive/v3/files?q='${folderId}'+in+parents+and+trashed=false&fields=files(id,name,mimeType)&pageSize=1000`;
+  
+  const response = await fetch(url, {
+    headers: { Authorization: `Bearer ${accessToken}` },
+  });
+
+  if (!response.ok) {
+    const errorText = await response.text();
+    throw new Error(`Erro ao listar arquivos: ${errorText}`);
+  }
+
+  const data = await response.json();
+  return data.files || [];
 }
 
 Deno.serve(async (req: Request) => {
-  // Resposta padrão para a verificação "preflight" (OPTIONS) do navegador
   if (req.method === "OPTIONS") {
     return new Response("ok", { headers: corsHeaders });
   }
 
   try {
-    // Inicializa o cliente Supabase com permissões de administrador para poder escrever no banco
+    // Inicializa Supabase com Service Role
     const supabase = createClient(
       Deno.env.get("SUPABASE_URL")!,
       Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!
     );
 
-    // 1. Recebe a lista de arquivos do Google Drive enviada pelo frontend no corpo da requisição
-    const driveFiles: DriveFile[] = await req.json();
+    console.log("🔄 Iniciando sincronização com Google Drive...");
 
-    if (!driveFiles || !Array.isArray(driveFiles)) {
-      throw new Error("O corpo da requisição deve ser um array de arquivos.");
+    // 1. Obter token de acesso
+    const accessToken = await getAccessToken();
+    console.log("✅ Token de acesso obtido");
+
+    // 2. Listar arquivos do Drive
+    const driveFiles = await listDriveFiles(accessToken, DRIVE_FOLDER_ID);
+    console.log(`📁 Encontrados ${driveFiles.length} arquivos no Drive`);
+
+    // Filtrar apenas imagens
+    const imageFiles = driveFiles.filter((file: any) => 
+      file.mimeType?.startsWith('image/')
+    );
+    console.log(`🖼️  ${imageFiles.length} arquivos de imagem`);
+
+    if (imageFiles.length === 0) {
+      return new Response(
+        JSON.stringify({ 
+          message: "Nenhuma imagem encontrada na pasta do Drive",
+          added: 0,
+          skipped: 0
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
 
-    if (driveFiles.length === 0) {
-      return new Response(JSON.stringify({ message: "Nenhuma lista de arquivos recebida para sincronizar.", added: 0 }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // 2. Busca no banco de dados os IDs de todos os arquivos do Drive que já foram sincronizados
-    const { data: existingImages, error: dbError } = await supabase
+    // 3. Buscar imagens já sincronizadas
+    const { data: existingImages } = await supabase
       .from('certified_images')
       .select('google_drive_file_id');
-      
-    if (dbError) {
-      throw new Error(`Erro ao buscar imagens existentes no banco: ${dbError.message}`);
+
+    const existingFileIds = new Set(
+      existingImages?.map(img => img.google_drive_file_id) || []
+    );
+
+    // 4. Filtrar novas imagens
+    const newFiles = imageFiles.filter((file: any) => 
+      !existingFileIds.has(file.id)
+    );
+    console.log(`🆕 ${newFiles.length} novas imagens para sincronizar`);
+
+    if (newFiles.length === 0) {
+      return new Response(
+        JSON.stringify({ 
+          message: "Banco de dados já está sincronizado",
+          added: 0,
+          skipped: imageFiles.length
+        }),
+        { headers: { ...corsHeaders, "Content-Type": "application/json" } }
+      );
     }
-    
-    // Cria um Set para uma verificação rápida e eficiente
-    const existingFileIds = new Set(existingImages.map(img => img.google_drive_file_id));
 
-    // 3. Filtra a lista recebida para manter apenas os arquivos que ainda não estão no banco
-    const newFilesToSync = driveFiles.filter(file => !existingFileIds.has(file.id));
+    // 5. Preparar registros para inserção
+    const newImageRecords = newFiles.map((file: any) => {
+      const productName = file.name
+        .replace(/\.[^/.]+$/, "") // Remove extensão
+        .replace(/[-_]/g, " ")     // Substitui - e _ por espaço
+        .trim();
 
-    if (newFilesToSync.length === 0) {
-      return new Response(JSON.stringify({ message: "Banco de dados já está sincronizado. Nenhuma imagem nova encontrada.", added: 0 }), {
-        headers: { ...corsHeaders, "Content-Type": "application/json" },
-      });
-    }
-
-    // 4. Prepara os registros dos novos arquivos para serem inseridos no Supabase
-    const newImageRecords = newFilesToSync.map(file => {
-      const productName = file.name.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ").trim();
       return {
         google_drive_file_id: file.id,
         product_name: productName,
         normalized_name: normalizeString(productName),
-        image_url: `https://drive.google.com/uc?id=${file.id}`, // URL pública de visualização do Drive
+        image_url: `https://drive.google.com/uc?id=${file.id}`,
         filename: file.name,
-        validated: true, // Vamos assumir que são validadas por estarem nesta pasta
+        category: null,
+        tags: [],
+        usage_count: 0,
+        uploaded_by: null, // Sistema de sincronização
       };
     });
 
-    // 5. Insere todos os novos registros no banco de dados de uma só vez
-    const { error: insertError } = await supabase.from('certified_images').insert(newImageRecords);
+    // 6. Inserir no banco de dados
+    const { error: insertError } = await supabase
+      .from('certified_images')
+      .insert(newImageRecords);
+
     if (insertError) {
-      throw new Error(`Erro ao inserir novas imagens no banco: ${insertError.message}`);
+      throw new Error(`Erro ao inserir imagens: ${insertError.message}`);
     }
 
-    // Retorna uma resposta de sucesso
+    console.log(`✅ ${newFiles.length} imagens sincronizadas com sucesso`);
+
     return new Response(
-      JSON.stringify({ message: `Sincronizadas ${newFilesToSync.length} novas imagens com sucesso.`, added: newFilesToSync.length }),
+      JSON.stringify({ 
+        message: `Sincronizadas ${newFiles.length} novas imagens com sucesso!`,
+        added: newFiles.length,
+        skipped: imageFiles.length - newFiles.length,
+        total: imageFiles.length
+      }),
       { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
   } catch (error) {
-    // Em caso de qualquer erro, retorna uma resposta com status 500
-    console.error("Erro na função sync-drive:", error);
-    return new Response(JSON.stringify({ error: error.message }), {
-      status: 500,
-      headers: { ...corsHeaders, "Content-Type": "application/json" },
-    });
+    console.error("❌ Erro na sincronização:", error);
+    return new Response(
+      JSON.stringify({ 
+        error: error.message,
+        details: "Verifique se GOOGLE_CREDENTIALS_BASE64 está configurado corretamente"
+      }),
+      {
+        status: 500,
+        headers: { ...corsHeaders, "Content-Type": "application/json" }
+      }
+    );
   }
 });
