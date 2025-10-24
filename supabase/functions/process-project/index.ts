@@ -58,11 +58,8 @@ async function callEdgeFunction(functionName: string, payload: any, authToken: s
 }
 
 Deno.serve(async (req: Request) => {
-  if (req.method === "OPTIONS") {
-    return new Response(null, {
-      status: 200,
-      headers: corsHeaders,
-    });
+if (req.method === "OPTIONS") {
+  return new Response("ok", { headers: corsHeaders });
   }
 
   try {

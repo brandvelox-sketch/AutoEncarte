@@ -7,16 +7,17 @@ import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/com
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
-import { Alert, AlertDescription } from '@/components/ui/alert';
-import { 
-  Play, 
-  CheckCircle, 
-  XCircle, 
-  Clock, 
+import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert';
+import {
+  Play,
+  CheckCircle,
+  XCircle,
+  Clock,
   Search,
   Image as ImageIcon,
   Package,
-  TrendingUp
+  TrendingUp,
+  AlertCircle, // Importe o ícone de alerta
 } from 'lucide-react';
 
 const statusConfig = {
@@ -39,6 +40,7 @@ export default function ProjectDetails() {
   const { id } = useParams();
   const queryClient = useQueryClient();
   const [realtimeProducts, setRealtimeProducts] = useState([]);
+  const [error, setError] = useState(null);
 
   const { data: project, isLoading: loadingProject } = useQuery({
     queryKey: ['project', id],
@@ -54,16 +56,24 @@ export default function ProjectDetails() {
   const startProcessingMutation = useMutation({
     mutationFn: (projectId) => projectService.startProjectProcessing(projectId),
     onSuccess: () => {
+      setError(null);
       queryClient.invalidateQueries({ queryKey: ['project', id] });
       queryClient.invalidateQueries({ queryKey: ['products', id] });
     },
+    onError: (err) => {
+      console.error("Erro ao iniciar processamento:", err);
+      setError(err.message || "Falha ao se comunicar com o serviço de processamento. Verifique se as Edge Functions foram publicadas (deploy).");
+    },
   });
 
-  // Configurar Supabase Realtime para produtos
+  useEffect(() => {
+    if (products.length > 0) {
+      setRealtimeProducts(products);
+    }
+  }, [products]);
+
   useEffect(() => {
     if (!id) return;
-
-    setRealtimeProducts(products);
 
     const channel = supabase
       .channel(`products-${id}`)
@@ -76,8 +86,6 @@ export default function ProjectDetails() {
           filter: `project_id=eq.${id}`,
         },
         (payload) => {
-          console.log('Product updated:', payload);
-          
           if (payload.eventType === 'UPDATE') {
             setRealtimeProducts((prev) =>
               prev.map((p) => (p.id === payload.new.id ? payload.new : p))
@@ -85,8 +93,6 @@ export default function ProjectDetails() {
           } else if (payload.eventType === 'INSERT') {
             setRealtimeProducts((prev) => [...prev, payload.new]);
           }
-          
-          // Invalidar queries para atualizar o projeto
           queryClient.invalidateQueries({ queryKey: ['project', id] });
         }
       )
@@ -95,9 +101,8 @@ export default function ProjectDetails() {
     return () => {
       supabase.removeChannel(channel);
     };
-  }, [id, products, queryClient]);
+  }, [id, queryClient]);
 
-  // Configurar Realtime para o projeto
   useEffect(() => {
     if (!id) return;
 
@@ -124,7 +129,7 @@ export default function ProjectDetails() {
 
   if (loadingProject || loadingProducts) {
     return (
-      <div className="p-6 flex items-center justify-center">
+      <div className="p-6 flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-blue-600"></div>
       </div>
     );
@@ -142,18 +147,16 @@ export default function ProjectDetails() {
 
   const displayProducts = realtimeProducts.length > 0 ? realtimeProducts : products;
   const completedProducts = displayProducts.filter(p => p.status === 'completed').length;
-  const progressPercentage = displayProducts.length > 0 
-    ? (completedProducts / displayProducts.length) * 100 
+  const progressPercentage = displayProducts.length > 0
+    ? (completedProducts / displayProducts.length) * 100
     : 0;
 
   const canStartProcessing = project.status === 'draft' || project.status === 'failed';
   const isProcessing = project.status === 'processing';
-
   const projectConfig = projectStatusConfig[project.status] || projectStatusConfig.draft;
 
   return (
     <div className="p-6 space-y-6 max-w-7xl mx-auto">
-      {/* Cabeçalho */}
       <div className="flex items-start justify-between">
         <div className="flex-1">
           <div className="flex items-center gap-3 mb-2">
@@ -175,7 +178,7 @@ export default function ProjectDetails() {
             {startProcessingMutation.isPending ? (
               <>
                 <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-white mr-2" />
-                Processando...
+                Iniciando...
               </>
             ) : (
               <>
@@ -187,8 +190,15 @@ export default function ProjectDetails() {
         )}
       </div>
 
-      {/* Estatísticas do Projeto */}
-      {(project.status === 'processing' || project.status === 'completed') && (
+      {error && (
+        <Alert variant="destructive">
+          <AlertCircle className="h-4 w-4" />
+          <AlertTitle>Falha ao Iniciar Processamento</AlertTitle>
+          <AlertDescription>{error}</AlertDescription>
+        </Alert>
+      )}
+
+      {(project.status === 'processing' || project.status === 'completed' || project.status === 'failed') && (
         <Card className="border-2 border-blue-200 bg-blue-50/50">
           <CardContent className="p-6">
             <div className="space-y-4">
@@ -198,46 +208,34 @@ export default function ProjectDetails() {
                   {Math.round(progressPercentage)}%
                 </span>
               </div>
-              
               <Progress value={progressPercentage} className="h-3" />
-              
               <div className="grid grid-cols-4 gap-4 pt-4 border-t">
+                {/* Cards de estatísticas */}
                 <div className="text-center">
                   <div className="flex items-center justify-center gap-2 mb-1">
                     <Package className="w-4 h-4 text-gray-600" />
-                    <p className="text-2xl font-bold text-gray-900">
-                      {displayProducts.length}
-                    </p>
+                    <p className="text-2xl font-bold text-gray-900">{project.total_products || 0}</p>
                   </div>
-                  <p className="text-sm text-gray-600">Total de Produtos</p>
+                  <p className="text-sm text-gray-600">Total</p>
                 </div>
-                
                 <div className="text-center">
                   <div className="flex items-center justify-center gap-2 mb-1">
                     <CheckCircle className="w-4 h-4 text-green-600" />
-                    <p className="text-2xl font-bold text-green-600">
-                      {project.products_from_bank || 0}
-                    </p>
+                    <p className="text-2xl font-bold text-green-600">{project.products_from_bank || 0}</p>
                   </div>
                   <p className="text-sm text-gray-600">Do Banco</p>
                 </div>
-                
                 <div className="text-center">
                   <div className="flex items-center justify-center gap-2 mb-1">
                     <TrendingUp className="w-4 h-4 text-blue-600" />
-                    <p className="text-2xl font-bold text-blue-600">
-                      {project.products_from_web || 0}
-                    </p>
+                    <p className="text-2xl font-bold text-blue-600">{project.products_from_web || 0}</p>
                   </div>
                   <p className="text-sm text-gray-600">Da Web</p>
                 </div>
-                
                 <div className="text-center">
                   <div className="flex items-center justify-center gap-2 mb-1">
                     <XCircle className="w-4 h-4 text-red-600" />
-                    <p className="text-2xl font-bold text-red-600">
-                      {project.products_failed || 0}
-                    </p>
+                    <p className="text-2xl font-bold text-red-600">{project.products_failed || 0}</p>
                   </div>
                   <p className="text-sm text-gray-600">Falhas</p>
                 </div>
@@ -249,14 +247,13 @@ export default function ProjectDetails() {
 
       {isProcessing && (
         <Alert className="bg-blue-50 border-blue-200">
-          <AlertDescription className="text-blue-800">
-            <strong>⚡ Processamento em andamento!</strong> As imagens estão sendo buscadas e validadas automaticamente. 
-            A página será atualizada em tempo real.
+          <AlertDescription className="text-blue-800 flex items-center gap-2">
+            <div className="animate-spin rounded-full h-4 w-4 border-b-2 border-blue-600"></div>
+            <strong>Processamento em andamento!</strong> As imagens estão sendo buscadas e validadas. A página será atualizada em tempo real.
           </AlertDescription>
         </Alert>
       )}
 
-      {/* Lista de Produtos */}
       <Card>
         <CardHeader>
           <CardTitle>Produtos</CardTitle>
@@ -280,23 +277,12 @@ export default function ProjectDetails() {
                     <div className="aspect-square bg-gray-100 relative">
                       {product.image_url ? (
                         <>
-                          <img
-                            src={product.image_url}
-                            alt={product.name}
-                            className="w-full h-full object-contain"
-                            onError={(e) => {
-                              e.target.src = 'data:image/svg+xml,%3Csvg xmlns="http://www.w3.org/2000/svg" width="200" height="200"%3E%3Crect fill="%23ddd" width="200" height="200"/%3E%3Ctext fill="%23999" x="50%25" y="50%25" text-anchor="middle" dy=".3em"%3ESem imagem%3C/text%3E%3C/svg%3E';
-                            }}
-                          />
+                          <img src={product.image_url} alt={product.name} className="w-full h-full object-contain" />
                           {product.image_source === 'certified_bank' && (
-                            <div className="absolute top-2 right-2 bg-green-500 text-white px-2 py-1 rounded-full text-xs font-semibold">
-                              Banco Certificado
-                            </div>
+                            <div className="absolute top-2 right-2 bg-green-500 text-white px-2 py-1 rounded-full text-xs font-semibold">Banco</div>
                           )}
                           {product.image_source === 'web_validated' && (
-                            <div className="absolute top-2 right-2 bg-blue-500 text-white px-2 py-1 rounded-full text-xs font-semibold">
-                              Web Validada
-                            </div>
+                            <div className="absolute top-2 right-2 bg-blue-500 text-white px-2 py-1 rounded-full text-xs font-semibold">Web</div>
                           )}
                         </>
                       ) : (
@@ -317,10 +303,9 @@ export default function ProjectDetails() {
                       <div className="flex items-center justify-between">
                         {product.price > 0 && (
                           <p className="text-lg font-bold text-blue-600">
-                            R$ {product.price.toFixed(2)}
+                            R$ {Number(product.price).toFixed(2)}
                           </p>
                         )}
-                        
                         <Badge className={config.color}>
                           <StatusIcon className="w-3 h-3 mr-1" />
                           {config.label}

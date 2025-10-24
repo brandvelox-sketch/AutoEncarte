@@ -71,7 +71,7 @@ export default function ProjectCard({ project: initialProject }) {
               </span>
             </div>
           </div>
-          <Link to={createPageUrl(`ProjectDetails?id=${project.id}`)}>
+          <Link to={`/project/${project.id}`}>
             <Button size="sm" variant="outline" className="gap-2 hover:bg-blue-50 hover:border-blue-300">
               <ExternalLink className="w-4 h-4" />
               Abrir
