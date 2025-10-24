@@ -90,6 +90,10 @@ export const driveService = {
   async deleteFile(fileId) {
     return callEdgeFunction('google-drive-manager?action=delete', { fileId }, 'DELETE');
   },
+
+  async syncDrive() {
+    return callEdgeFunction('sync-drive', {});
+  },
 };
 
 export const projectService = {
@@ -236,77 +240,81 @@ export const certifiedImageService = {
   },
 
   async deleteImage(id) {
-    const { error } = await supabase
-      .from('certified_images')
-      .delete()
-      .eq('id', id);
+    // 1. Pega os dados da imagem no Supabase para encontrar o ID do Drive
+    const { data: image, error: getError } = await supabase
+        .from('certified_images')
+        .select('google_drive_file_id')
+        .eq('id', id)
+        .single();
 
-    if (error) throw error;
-  },
+    if (getError || !image) {
+        throw new Error('Imagem não encontrada para deletar.');
+    }
+
+    // 2. Deleta o arquivo do Google Drive (se existir um ID)
+    if (image.google_drive_file_id) {
+        await driveService.deleteFile(image.google_drive_file_id);
+    }
+
+    // 3. Deleta o registro do banco de dados do Supabase
+    const { error: deleteError } = await supabase
+        .from('certified_images')
+        .delete()
+        .eq('id', id);
+
+    if (deleteError) {
+        throw deleteError;
+    }
+},
   
-  async uploadImageFile(file, metadata = {}) {
+ async uploadImageFile(file, metadata = {}) {
     const { data: { user } } = await supabase.auth.getUser();
-
     if (!user) {
-      throw new Error('User not authenticated');
+        throw new Error('User not authenticated');
     }
 
-    // Gerar nome único para o arquivo
-    const fileExt = file.name.split('.').pop();
-    const fileName = `${Date.now()}-${Math.random().toString(36).substring(7)}.${fileExt}`;
-    const filePath = `${user.id}/${fileName}`;
+    const reader = new FileReader();
+    const imageDataPromise = new Promise((resolve, reject) => {
+        reader.onloadend = () => resolve(reader.result);
+        reader.onerror = reject;
+        reader.readAsDataURL(file);
+    });
+    const imageData = await imageDataPromise;
 
-    // Upload para o Storage
-    const { data: uploadData, error: uploadError } = await supabase.storage
-      .from('certified-images')
-      .upload(filePath, file, {
-        cacheControl: '3600',
-        upsert: false,
-      });
+    // A chamada para uploadImage agora só tem 3 argumentos
+    const { fileId, url, filename } = await driveService.uploadImage(
+        file.name,
+        imageData,
+        file.type
+        // A folderId foi removida daqui
+    );
 
-    if (uploadError) {
-      throw new Error(`Upload failed: ${uploadError.message}`);
-    }
-
-    // Obter URL pública
-    const { data: urlData } = supabase.storage
-      .from('certified-images')
-      .getPublicUrl(filePath);
-
-    const imageUrl = urlData.publicUrl;
-
-    // Criar registro no banco de dados
-    const normalizedName = metadata.product_name
-      ? metadata.product_name
-          .toLowerCase()
-          .normalize("NFD")
-          .replace(/[\u0300-\u036f]/g, "")
-          .replace(/[^a-z0-9\s]/g, "")
-          .trim()
-      : "";
+    const productName = metadata.product_name || filename.replace(/\.[^/.]+$/, "").replace(/[-_]/g, " ");
+    const normalizedName = productName
+        .toLowerCase()
+        .normalize("NFD")
+        .replace(/[\u0300-\u036f]/g, "")
+        .replace(/[^a-z0-9\s]/g, "")
+        .trim();
 
     const { data: imageRecord, error: dbError } = await supabase
-      .from('certified_images')
-      .insert([{
-        product_name: metadata.product_name || file.name,
-        normalized_name: normalizedName,
-        image_url: imageUrl,
-        category: metadata.category || null,
-        description: metadata.description || null,
-        tags: metadata.tags || [],
-        uploaded_by: user.id,
-        usage_count: 0,
-      }])
-      .select()
-      .single();
+        .from('certified_images')
+        .insert([{
+            product_name: productName,
+            normalized_name: normalizedName,
+            image_url: url,
+            google_drive_file_id: fileId,
+            category: metadata.category || null,
+            description: metadata.description || null,
+            tags: metadata.tags || [],
+            uploaded_by: user.id,
+        }])
+        .select()
+        .single();
 
     if (dbError) {
-      // Se falhar ao criar registro, deletar arquivo do storage
-      await supabase.storage
-        .from('certified-images')
-        .remove([filePath]);
-      
-      throw new Error(`Database error: ${dbError.message}`);
+        await driveService.deleteFile(fileId);
+        throw new Error(`Database error: ${dbError.message}`);
     }
 
     return imageRecord;

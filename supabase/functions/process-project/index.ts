@@ -11,22 +11,17 @@ interface ProcessProjectRequest {
   project_id: string;
 }
 
-interface Product {
-  id: string;
-  name: string;
-  description: string;
-  status: string;
-}
-
 interface CertifiedImage {
   id: string;
   product_name: string;
   normalized_name: string;
   image_url: string;
+  usage_count: number;
 }
 
 // Função auxiliar para normalizar strings
 function normalizeString(str: string): string {
+  if (!str) return "";
   return str
     .toLowerCase()
     .normalize("NFD")
@@ -58,8 +53,8 @@ async function callEdgeFunction(functionName: string, payload: any, authToken: s
 }
 
 Deno.serve(async (req: Request) => {
-if (req.method === "OPTIONS") {
-  return new Response("ok", { headers: corsHeaders });
+  if (req.method === "OPTIONS") {
+    return new Response("ok", { headers: corsHeaders });
   }
 
   try {
@@ -69,45 +64,33 @@ if (req.method === "OPTIONS") {
       throw new Error("project_id is required");
     }
 
-    // Obter token de autenticação
     const authHeader = req.headers.get("Authorization");
     if (!authHeader) {
       throw new Error("Authorization header is required");
     }
-
     const token = authHeader.replace("Bearer ", "");
 
-    // Criar cliente Supabase
     const supabaseUrl = Deno.env.get("SUPABASE_URL")!;
     const supabaseServiceKey = Deno.env.get("SUPABASE_SERVICE_ROLE_KEY")!;
-    
     const supabase = createClient(supabaseUrl, supabaseServiceKey);
 
-    // Atualizar status do projeto para "processing"
     await supabase
       .from("projects")
-      .update({ 
+      .update({
         status: "processing",
         processing_started_at: new Date().toISOString()
       })
       .eq("id", project_id);
 
-    // Buscar todos os produtos do projeto
     const { data: products, error: productsError } = await supabase
       .from("products")
       .select("*")
       .eq("project_id", project_id)
       .order("order", { ascending: true });
 
-    if (productsError) {
-      throw new Error(`Failed to fetch products: ${productsError.message}`);
-    }
+    if (productsError) throw new Error(`Failed to fetch products: ${productsError.message}`);
+    if (!products || products.length === 0) throw new Error("No products found for this project");
 
-    if (!products || products.length === 0) {
-      throw new Error("No products found for this project");
-    }
-
-    // Buscar todas as imagens certificadas
     const { data: certifiedImages } = await supabase
       .from("certified_images")
       .select("*");
@@ -117,23 +100,19 @@ if (req.method === "OPTIONS") {
     let productsFromWeb = 0;
     let productsFailed = 0;
 
-    // Processar cada produto
     for (const product of products) {
       try {
-        // Atualizar status do produto para "searching_bank"
         await supabase
           .from("products")
           .update({ status: "searching_bank" })
           .eq("id", product.id);
 
-        // 1. Verificar se existe imagem certificada
         const normalizedProductName = normalizeString(product.name);
-        const matchedImage = certifiedImages?.find(img => 
+        const matchedImage = certifiedImages?.find(img =>
           normalizeString(img.product_name) === normalizedProductName
         );
 
         if (matchedImage) {
-          // Imagem encontrada no banco certificado
           await supabase
             .from("products")
             .update({
@@ -143,7 +122,6 @@ if (req.method === "OPTIONS") {
             })
             .eq("id", product.id);
 
-          // Atualizar contagem de uso da imagem
           await supabase
             .from("certified_images")
             .update({
@@ -157,7 +135,6 @@ if (req.method === "OPTIONS") {
           continue;
         }
 
-        // 2. Buscar imagens na web
         await supabase
           .from("products")
           .update({ status: "searching_web" })
@@ -171,20 +148,22 @@ if (req.method === "OPTIONS") {
         );
 
         if (!searchResult.images || searchResult.images.length === 0) {
-          throw new Error("No images found");
+          throw new Error("Nenhuma imagem encontrada na busca web");
         }
 
-        // 3. Validar a melhor candidata com Gemini
         await supabase
           .from("products")
           .update({ status: "validating" })
           .eq("id", product.id);
 
+        // --- INÍCIO DO BLOCO DE DEPURAÇÃO ---
         let bestValidImage = null;
         let bestConfidence = 0;
+        const validationAttempts = [];
 
         for (const image of searchResult.images) {
           try {
+            console.log(`Validando imagem para "${product.name}": ${image.link}`);
             const validation = await callEdgeFunction(
               "validate-image-gemini",
               {
@@ -195,23 +174,26 @@ if (req.method === "OPTIONS") {
               token
             );
 
+            console.log(`Resposta do Gemini para ${image.link}: ${JSON.stringify(validation)}`);
+            validationAttempts.push({ image: image.link, validation });
+
             if (validation.isValid && validation.confidence > bestConfidence) {
               bestValidImage = image.link;
               bestConfidence = validation.confidence;
             }
 
-            // Se encontramos uma imagem com alta confiança, usar ela
             if (bestConfidence >= 0.8) {
+              console.log(`Imagem de alta confiança (${bestConfidence}) encontrada, parando a busca.`);
               break;
             }
           } catch (validationError) {
-            console.error(`Validation failed for image: ${validationError}`);
+            console.error(`Falha na validação da imagem ${image.link}: ${validationError.message}`);
+            validationAttempts.push({ image: image.link, error: validationError.message });
             continue;
           }
         }
 
         if (bestValidImage) {
-          // Imagem válida encontrada
           await supabase
             .from("products")
             .update({
@@ -224,11 +206,11 @@ if (req.method === "OPTIONS") {
           productsCompleted++;
           productsFromWeb++;
         } else {
-          throw new Error("No valid image found");
+          throw new Error(`Nenhuma imagem válida encontrada. Tentativas: ${JSON.stringify(validationAttempts)}`);
         }
+        // --- FIM DO BLOCO DE DEPURAÇÃO ---
 
       } catch (productError) {
-        // Falha ao processar produto
         await supabase
           .from("products")
           .update({
@@ -241,9 +223,7 @@ if (req.method === "OPTIONS") {
       }
     }
 
-    // Atualizar estatísticas do projeto
     const finalStatus = productsFailed === products.length ? "failed" : "completed";
-    
     await supabase
       .from("projects")
       .update({
@@ -267,29 +247,14 @@ if (req.method === "OPTIONS") {
         products_from_web: productsFromWeb,
         products_failed: productsFailed,
       }),
-      {
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json",
-        },
-      }
+      { headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
 
   } catch (error) {
     console.error("Process project error:", error);
-    
     return new Response(
-      JSON.stringify({ 
-        error: error.message,
-        success: false,
-      }),
-      {
-        status: 500,
-        headers: {
-          ...corsHeaders,
-          "Content-Type": "application/json",
-        },
-      }
+      JSON.stringify({ error: error.message, success: false }),
+      { status: 500, headers: { ...corsHeaders, "Content-Type": "application/json" } }
     );
   }
 });

@@ -24,66 +24,53 @@ interface DeleteRequest {
 }
 
 async function getAccessToken(): Promise<string> {
-  const clientEmail = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_EMAIL");
-  const privateKey = Deno.env.get("GOOGLE_SERVICE_ACCOUNT_PRIVATE_KEY")?.replace(/\\n/g, '\n');
+    // 1. Pega o JSON de credenciais inteiro codificado em Base64
+    const credentialsBase64 = Deno.env.get("GOOGLE_CREDENTIALS_BASE64");
+    if (!credentialsBase64) {
+        throw new Error("GOOGLE_CREDENTIALS_BASE64 is not configured in Supabase secrets");
+    }
 
-  if (!clientEmail || !privateKey) {
-    throw new Error("Google Service Account credentials not configured");
-  }
+    // 2. Decodifica e parseia o JSON
+    const credentials = JSON.parse(atob(credentialsBase64));
+    const clientEmail = credentials.client_email;
+    const privateKey = credentials.private_key;
 
-  const header = {
-    alg: "RS256",
-    typ: "JWT",
-  };
+    if (!clientEmail || !privateKey) {
+        throw new Error("Invalid Google Service Account credentials format");
+    }
 
-  const now = Math.floor(Date.now() / 1000);
-  const claim = {
-    iss: clientEmail,
-    scope: "https://www.googleapis.com/auth/drive.file",
-    aud: "https://oauth2.googleapis.com/token",
-    exp: now + 3600,
-    iat: now,
-  };
+    const header = { alg: "RS256", typ: "JWT" };
+    const now = Math.floor(Date.now() / 1000);
+    const claim = {
+        iss: clientEmail,
+        scope: "https://www.googleapis.com/auth/drive.readonly https://www.googleapis.com/auth/drive.file",
+        aud: "https://oauth2.googleapis.com/token",
+        exp: now + 3600,
+        iat: now,
+    };
 
-  const encoder = new TextEncoder();
-  const key = await crypto.subtle.importKey(
-    "pkcs8",
-    encoder.encode(privateKey),
-    { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" },
-    false,
-    ["sign"]
-  );
+    const encoder = new TextEncoder();
+    const key = await crypto.subtle.importKey("pkcs8", encoder.encode(privateKey), { name: "RSASSA-PKCS1-v1_5", hash: "SHA-256" }, false, ["sign"]);
 
-  const encodedHeader = btoa(JSON.stringify(header)).replace(/=/g, "");
-  const encodedClaim = btoa(JSON.stringify(claim)).replace(/=/g, "");
-  const message = `${encodedHeader}.${encodedClaim}`;
+    const encodedHeader = btoa(JSON.stringify(header)).replace(/=/g, "");
+    const encodedClaim = btoa(JSON.stringify(claim)).replace(/=/g, "");
+    const message = `${encodedHeader}.${encodedClaim}`;
+    const signature = await crypto.subtle.sign("RSASSA-PKCS1-v1_5", key, encoder.encode(message));
+    const encodedSignature = btoa(String.fromCharCode(...new Uint8Array(signature))).replace(/\+/g, "-").replace(/\//g, "_").replace(/=/g, "");
+    const jwt = `${message}.${encodedSignature}`;
 
-  const signature = await crypto.subtle.sign(
-    "RSASSA-PKCS1-v1_5",
-    key,
-    encoder.encode(message)
-  );
+    const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
+        method: "POST",
+        headers: { "Content-Type": "application/x-www-form-urlencoded" },
+        body: `grant_type=urn:ietf:params:oauth-grant-type:jwt-bearer&assertion=${jwt}`,
+    });
 
-  const encodedSignature = btoa(String.fromCharCode(...new Uint8Array(signature)))
-    .replace(/\+/g, "-")
-    .replace(/\//g, "_")
-    .replace(/=/g, "");
-
-  const jwt = `${message}.${encodedSignature}`;
-
-  const tokenResponse = await fetch("https://oauth2.googleapis.com/token", {
-    method: "POST",
-    headers: { "Content-Type": "application/x-www-form-urlencoded" },
-    body: `grant_type=urn:ietf:params:oauth:grant-type:jwt-bearer&assertion=${jwt}`,
-  });
-
-  if (!tokenResponse.ok) {
-    const errorData = await tokenResponse.text();
-    throw new Error(`Failed to get access token: ${errorData}`);
-  }
-
-  const tokenData = await tokenResponse.json();
-  return tokenData.access_token;
+    if (!tokenResponse.ok) {
+        const errorText = await tokenResponse.text();
+        throw new Error(`Failed to get access token: ${errorText}`);
+    }
+    const tokenData = await tokenResponse.json();
+    return tokenData.access_token;
 }
 
 Deno.serve(async (req: Request) => {
